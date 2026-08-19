@@ -1,7 +1,7 @@
 package com.fish.cpuoptimizer;
 
+import com.fish.cpuoptimizer.threading.ThreadPoolManager;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.crafting.RecipeManager;
 
 import java.lang.reflect.Field;
@@ -9,47 +9,36 @@ import java.util.Map;
 
 public class CacheCleaner {
     private static int tickCounter = 0;
+    private static boolean cleaning = false;
 
     public static void tick(MinecraftServer server) {
         if (server == null) return;
-        if (++tickCounter < 20 * 10) return; // 每10秒执行一次
+        if (cleaning) return;
+        if (++tickCounter < 20 * 30) return; // 改为每30秒执行一次
         tickCounter = 0;
 
-        try {
-            RecipeManager recipes = server.getRecipeManager();
-            Field recipesField = RecipeManager.class.getDeclaredField("recipes");
-            recipesField.setAccessible(true);
-            Map<?, ?> recipesMap = (Map<?, ?>) recipesField.get(recipes);
-            if (recipesMap != null && recipesMap.size() > 1000) {
-                recipesMap.clear();
-                CpuOptimizerMod.LOGGER.debug("✅ 清理了 RecipeManager 缓存");
+        // ===== 关键修改：将清理操作提交到异步线程池 =====
+        ThreadPoolManager.submitIOTask(() -> {
+            cleaning = true;
+            try {
+                // 清理 RecipeManager
+                RecipeManager recipes = server.getRecipeManager();
+                Field recipesField = RecipeManager.class.getDeclaredField("recipes");
+                recipesField.setAccessible(true);
+                Map<?, ?> recipesMap = (Map<?, ?>) recipesField.get(recipes);
+                if (recipesMap != null && recipesMap.size() > 1000) {
+                    recipesMap.clear();
+                    CpuOptimizerMod.LOGGER.debug("✅ 异步清理了 RecipeManager 缓存");
+                }
+
+                // 触发 GC（放在异步线程中执行，不阻塞主线程）
+                System.gc();
+                System.runFinalization();
+            } catch (Exception e) {
+                CpuOptimizerMod.LOGGER.warn("异步缓存清理异常", e);
+            } finally {
+                cleaning = false;
             }
-
-            for (ServerLevel level : server.getAllLevels()) {
-                try {
-                    Field entityStorageField = level.getClass().getDeclaredField("entityStorage");
-                    entityStorageField.setAccessible(true);
-                    Object storage = entityStorageField.get(level);
-                    try {
-                        storage.getClass().getMethod("compact").invoke(storage);
-                    } catch (NoSuchMethodException ignored) {}
-                } catch (Exception ignored) {}
-
-                try {
-                    Field poiManagerField = level.getClass().getDeclaredField("poiManager");
-                    poiManagerField.setAccessible(true);
-                    Object poiManager = poiManagerField.get(level);
-                    Field poiStorageField = poiManager.getClass().getDeclaredField("poiStorage");
-                    poiStorageField.setAccessible(true);
-                    Object poiStorage = poiStorageField.get(poiManager);
-                    poiStorage.getClass().getMethod("compact").invoke(poiStorage);
-                } catch (Exception ignored) {}
-            }
-
-            System.gc();
-            System.runFinalization();
-        } catch (Exception e) {
-            CpuOptimizerMod.LOGGER.warn("缓存清理异常", e);
-        }
+        });
     }
 }

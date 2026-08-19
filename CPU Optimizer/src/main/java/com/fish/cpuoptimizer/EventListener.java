@@ -18,15 +18,14 @@ public class EventListener {
     private int tickCounter = 0;
     private boolean gcRunning = false;
 
-    // ===== 内存监控与三级回收 =====
     @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
-        if (gcRunning) return;
 
         MinecraftServer server = event.getServer();
-        CacheCleaner.tick(server); // 每10秒执行深度缓存清理
+        CacheCleaner.tick(server); // 异步执行，不阻塞主线程
 
+        // ===== 每秒监控内存，但不再主动触发 GC =====
         if (++tickCounter % 20 != 0) return;
         tickCounter = 0;
 
@@ -36,45 +35,36 @@ public class EventListener {
         double freePercent = (1.0 - (double) used / max) * 100.0;
 
         int threshold = Config.COMMON.memoryThreshold.get();
-        if (freePercent < threshold) {
-            CpuOptimizerMod.LOGGER.warn("⚠️ 内存剩余 {:.1f}%，启动三级回收", freePercent);
+        if (freePercent < threshold && !gcRunning) {
+            CpuOptimizerMod.LOGGER.warn("⚠️ 内存剩余 {:.1f}%，即将在异步线程执行 GC", freePercent);
             gcRunning = true;
-            // 第一级：常规 GC
-            System.gc();
-            try { Thread.sleep(50); } catch (InterruptedException ignored) {}
-            // 第二级：清理堆外内存（DirectBuffer）
-            try {
-                java.nio.ByteBuffer.allocateDirect(0);
-                System.runFinalization();
-            } catch (Exception ignored) {}
-            // 第三级：如果依然紧张，紧急双重 GC
-            MemoryUsage after = memoryBean.getHeapMemoryUsage();
-            double afterFree = (1.0 - (double) after.getUsed() / after.getMax()) * 100.0;
-            if (afterFree < 5) {
-                CpuOptimizerMod.LOGGER.warn("⚠️ 内存依然紧张，执行紧急双重GC");
-                System.gc();
-                System.gc();
-            }
-            gcRunning = false;
+            // ===== 将 GC 移到异步线程，不阻塞主线程 =====
+            ThreadPoolManager.submitIOTask(() -> {
+                try {
+                    System.gc();
+                    System.runFinalization();
+                    CpuOptimizerMod.LOGGER.debug("✅ 异步 GC 完成");
+                } finally {
+                    gcRunning = false;
+                }
+            });
         }
     }
 
-    // ===== 多核异步区块加载（预加载方块实体、光照） =====
     @SubscribeEvent
     public void onChunkLoad(ChunkEvent.Load event) {
         if (event.getLevel().isClientSide()) return;
         if (!(event.getChunk() instanceof LevelChunk chunk)) return;
 
+        // ===== 区块预加载仍然异步执行，但限制线程数 =====
         ThreadPoolManager.submitComputeTask(() -> {
             try {
-                // 预加载方块实体（触发内部初始化）
                 var blockEntities = chunk.getBlockEntities();
                 if (blockEntities != null && !blockEntities.isEmpty()) {
                     blockEntities.values().forEach(be -> {
                         if (be != null) be.getBlockState();
                     });
                 }
-                // 触发光照引擎初始化
                 Level level = chunk.getLevel();
                 if (level != null) {
                     level.getLightEngine();
@@ -84,20 +74,9 @@ public class EventListener {
                 CpuOptimizerMod.LOGGER.error("异步预加载区块失败: {}", e.getMessage());
             }
         });
-
-        // ===== 区块加载后，如果内存使用率 > 70%，触发 GC 降低峰值 =====
-        MemoryUsage heap = memoryBean.getHeapMemoryUsage();
-        double usedPercent = (double) heap.getUsed() / heap.getMax() * 100.0;
-        if (usedPercent > 70) {
-            // 使用独立线程执行 GC，避免阻塞主线程
-            ThreadPoolManager.submitComputeTask(() -> {
-                System.gc();
-                CpuOptimizerMod.LOGGER.debug("⚡ 区块加载后触发 GC（内存使用 {}%）", String.format("%.1f", usedPercent));
-            });
-        }
     }
 
-    // ===== 客户端帧率优化：提升进程优先级（仅 Windows） =====
+    // ===== 客户端帧率优化（仅客户端，不影响服务器） =====
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.START) return;
