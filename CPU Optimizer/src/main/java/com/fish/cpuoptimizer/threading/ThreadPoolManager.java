@@ -7,12 +7,12 @@ import java.util.concurrent.TimeUnit;
 
 public class ThreadPoolManager {
     private static final boolean IS_SERVER = !System.getProperty("sun.java.command", "").contains("client");
-    private static final int POOL_SIZE = IS_SERVER ? 2 : Math.max(4, Runtime.getRuntime().availableProcessors() / 2);
+    private static final int POOL_SIZE = IS_SERVER ? 1 : 2;
 
     private static final ExecutorService IO_EXECUTOR = Executors.newFixedThreadPool(POOL_SIZE, r -> {
         Thread t = new Thread(r, "CpuOpt-Background");
         t.setDaemon(true);
-        t.setPriority(Thread.MIN_PRIORITY + 1);
+        t.setPriority(Thread.MIN_PRIORITY);
         return t;
     });
 

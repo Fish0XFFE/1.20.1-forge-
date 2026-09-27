@@ -21,6 +21,6 @@ public class CpuOptimizerMod {
         ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, Config.CLIENT_SPEC);
         MinecraftForge.EVENT_BUS.register(new EventListener());
         DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> AffinityBinderClient::tryAutoBind);
-        LOGGER.info("✅ CPU Optimizer 模组加载完成！");
+        LOGGER.info("模组加载完成");
     }
 }

@@ -5,7 +5,6 @@ import org.apache.commons.lang3.tuple.Pair;
 
 public class Config {
 
-    // ==================== 通用配置（服务端 + 客户端共享） ====================
     public static class CommonConfig {
         public final ForgeConfigSpec.IntValue memoryThreshold;
 
@@ -29,7 +28,6 @@ public class Config {
     }
 
 
-    // ==================== 客户端配置（仅客户端生效） ====================
     public static class ClientConfig {
         public final ForgeConfigSpec.BooleanValue autoAffinity;
         public final ForgeConfigSpec.BooleanValue skipOldCpu;
@@ -38,21 +36,21 @@ public class Config {
         public final ForgeConfigSpec.ConfigValue<String> affinityMaskHex;
 
         ClientConfig(ForgeConfigSpec.Builder builder) {
-            builder.comment("客户端 CPU 亲和性绑定配置").push("client");
+            builder.comment("客户端CPU亲和性绑定配置").push("client");
             autoAffinity = builder
-                    .comment("是否自动绑定 CPU 亲和性（默认绑定所有核心）")
+                    .comment("是否自动绑定CPU亲和性")
                     .define("autoAffinity", true);
             skipOldCpu = builder
-                    .comment("当逻辑核心数 ≤ 此值时跳过绑定（保护老 CPU）")
+                    .comment("核心数小于等于n时默认全核")
                     .define("skipOldCpu", true);
             maxCoresForBinding = builder
-                    .comment("（已弃用，保留兼容）")
+                    .comment("这个可以滚了，不要动他！")
                     .defineInRange("maxCoresForBinding", 0, 0, 64);
             affinityCoreRange = builder
-                    .comment("手动指定核心范围（优先级高于自动），例如 '0-5' 或 '0,2,4,6'，留空则自动绑定所有核心")
+                    .comment("手动指定核心范围")
                     .define("affinityCoreRange", "");
             affinityMaskHex = builder
-                    .comment("手动指定十六进制掩码（优先级最高），例如 '0xFFFF' 表示绑定前16个核心")
+                    .comment("手动指定掩码")
                     .define("affinityMaskHex", "");
             builder.pop();
         }
