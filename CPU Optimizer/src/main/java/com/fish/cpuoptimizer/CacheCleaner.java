@@ -10,17 +10,14 @@ public class CacheCleaner {
 
     public static void tick(MinecraftServer server) {
         if (server == null) return;
-        if (++tickCounter < 20 * 45) return;
+        if (++tickCounter < 20 * 30) return;
         tickCounter = 0;
-
-        long now = System.currentTimeMillis();
-        if (now - lastGcTime < 45000) return;
-
-        queueGc(1500);
+        if (System.currentTimeMillis() - lastGcTime < 30000) return;
+        queueGc(1000);
     }
 
     public static void forceClean() {
-        queueGc(500);
+        queueGc(200);
     }
 
     private static void queueGc(long delayMs) {
@@ -30,14 +27,14 @@ public class CacheCleaner {
             try {
                 Thread.sleep(delayMs);
                 System.gc();
-                Thread.sleep(30);
+                Thread.sleep(20);
                 System.runFinalization();
                 Thread.sleep(10);
                 System.gc();
                 lastGcTime = System.currentTimeMillis();
             } catch (InterruptedException ignored) {
             } catch (Exception e) {
-                CpuOptimizerMod.LOGGER.warn("后台GC异常，请自行查看有没有毛病: {}", e.getMessage());
+                CpuOptimizerMod.LOGGER.warn("后台GC异常: {}", e.getMessage());
             } finally {
                 gcQueued = false;
             }

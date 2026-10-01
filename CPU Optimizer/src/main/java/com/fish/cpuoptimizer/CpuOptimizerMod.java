@@ -1,7 +1,8 @@
 package com.fish.cpuoptimizer;
 
-import com.fish.cpuoptimizer.config.Config;
 import com.fish.cpuoptimizer.affinity.AffinityBinderClient;
+import com.fish.cpuoptimizer.config.Config;
+import com.fish.cpuoptimizer.threading.ThreadPoolManager;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.fml.DistExecutor;
@@ -21,6 +22,9 @@ public class CpuOptimizerMod {
         ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, Config.CLIENT_SPEC);
         MinecraftForge.EVENT_BUS.register(new EventListener());
         DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> AffinityBinderClient::tryAutoBind);
-        LOGGER.info("模组加载完成");
+        LOGGER.info("区块池:{} ",
+                ThreadPoolManager.getChunkPoolSize(),
+                ThreadPoolManager.getChunkPoolSize() + 2);
+                
     }
 }
