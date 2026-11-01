@@ -1,0 +1,106 @@
+CPU Optimizer 1.9.0
+
+一、本次主要变化
+
+1. 绑定模式改为自动决策。cpu.bindMode 默认 AUTO：大小核机器且 P 核不少于 8 个时锁定 P 核，其余情况全核运行。上一版把整个进程钉在 i5-13500H 的 4 个 P 核上，区块生成与网格构建的 15 个工作线程只能挤在这 4 个核里，跑图加载速度自然提不上去。现在会按机器自动取舍，日志里会写明选择原因。
+2. 客户端实体降频默认开启。上一版只降频服务端，客户端仍然每 tick 处理全部实体，实体多的世界里这是纯 CPU 开销，与显卡无关，所以帧率提升不明显。现在客户端与服务端使用同一套距离分档。
+3. 距离分档从一档改成三档：靠近玩家 32 格内全速，32 到 64 格按 tickInterval 降频，64 到 128 格按 farInterval 再降，超过 128 格在 farInterval 基础上再加一档。原来 48 格内全速，实体密集的存档等于没降。
+4. 掉落物与经验球单独处理：超过 64 格且当前间隔小于 4 时强制改成 4，拾取判定只在一格左右生效，远处的物品不需要每 tick 更新。
+5. 客户端硬上限：超过渲染距离换算出的 32 格之外，实体根本不参与客户端 tick，因为它们根本画不出来。
+6. 低配机器自动加码：物理线程不超过 4 的机器，降频间隔额外加 2，上限 8。
+7. 新增性能统计。每 6000 tick 与世界退出时输出一行，包含平均帧间隔、帧率、最长帧、超过 50 毫秒的卡顿次数、客户端 tick 平均耗时、服务端 tick 平均耗时与超时次数。下一轮排查方向靠这行日志判断，不再靠猜。
+8. 新增实体统计：退出时输出服务端与客户端每 tick 处理与跳过的实体数量，用来确认降频真的在工作。
+9. Mixin 改为软失败：cpuoptimizer.mixins.json 里 required 为 false，两个注入点的 require 为 0。其他模组改了同名方法时只是这个功能失效，不会导致游戏崩溃；注入没生效时会在 400 tick 后打印一条警告。
+10. 国产处理器适配：海光、兆芯按国产 x86 识别，飞腾、鲲鹏按国产 ARM64 识别，龙芯按 LoongArch 识别并标注 LSX、LASX，申威单独标注。ARM 平台支持 Windows on ARM、macOS 与 Linux，指令集检测新增 SVE、LSX、LASX、RVV、CRC32。
+11. 内存整理阈值从 85 降到 75，间隔 30 秒，新增世界退出后延迟整理，标题界面与空载服务端另外整理。仍然不会在游戏进行中触发 GC。
+12. JVM 参数建议新增 -XX:+UseStringDeduplication、-XX:SoftRefLRUPolicyMSPerMB=64、-XX:+PerfDisableSharedMem，并在实际堆上限低于 2048 MB 时给出警告。
+13. 自适应降频：服务端 tick 平均耗时超过 40 毫秒时自动把实体降频再加一档，回到 25 毫秒以下自动回退，切换时日志会提示。刷怪塔这类极端存档也能把 tick 压回正常范围。
+
+二、距离分档规则
+
+1. 玩家本人、载具、末影龙、凋灵永远全速。
+2. 出生不足 40 tick 的实体全速，避免新建实体第一秒动作异常。
+3. entity.skipNamedEntities 为 true 时，有自定义名称的实体全速，避免命名生物卡住。
+4. entity.whitelist 里的实体类型永远全速，按注册名填写，例如 minecraft:villager。
+5. 其余实体按到最近玩家的距离落到对应档位，再按 tick 计数加实体 ID 取模错峰，保证不会有一半实体在同一 tick 一起恢复。
+
+三、配置文件
+
+路径 config/cpuoptimizer-common.toml，服务端与客户端通用。
+
+general.enabled 总开关
+general.logDetail 是否输出详细日志
+general.logStatistics 是否输出性能统计
+general.crashGuard 是否开启崩溃兜底与崩溃报告补写，默认开启
+
+cpu.bindMode 绑定模式，AUTO 自动、P_CORES 只锁 P 核、ALL 全核、OFF 不绑定
+cpu.affinityMask 手动掩码，十六进制，留空表示按模式自动
+cpu.processPriority 进程优先级，DEFAULT、ABOVE_NORMAL、HIGH，默认 ABOVE_NORMAL
+cpu.tuneThreadPriority 是否把渲染线程、服务端线程、客户端线程提高一档线程优先级
+cpu.deprioritizeBackground 锁定 P 核后是否把区块生成、缓冲区构建等后台线程降一档，默认开启
+
+power.aggressive 是否启用激进高频策略
+power.ultimatePerformance 是否切换到卓越性能方案
+power.disablePowerThrottling 是否关闭 Windows 电源节流
+power.applyOnBattery 电池供电时是否同样生效
+power.restoreOnDisable 关闭激进策略时是否恢复原始电源方案
+
+entity.throttleEnabled 实体降频总开关
+entity.profile 档位，BALANCED 使用下面的显式数值，EXTREME 自动收紧到 24/48/96 与 3/6，默认 EXTREME
+entity.nearDistance 全速距离，默认 32
+entity.throttleDistance 第一档降频距离，默认 64
+entity.farDistance 第二档降频距离，默认 128
+entity.tickInterval 第一档间隔，默认 2
+entity.farInterval 第二档及更远间隔，默认 4
+entity.throttleClient 客户端降频开关，默认开启
+entity.throttleItems 掉落物与经验球额外降频，默认开启
+entity.skipNamedEntities 命名实体豁免，默认开启
+entity.whitelist 豁免实体类型列表，默认空
+
+memory.compactAtLoading 是否在标题界面、世界退出与空载服务端整理内存
+memory.aggressive 激进整理，阈值压到 70%、间隔压到 20 秒，并新增暂停界面整理，默认开启
+memory.compactThreshold 整理阈值，已用堆百分比，默认 75
+memory.compactIntervalSeconds 两次整理的最小间隔秒数，默认 30
+
+四、注意事项
+
+1. 电源策略写入需要管理员权限，没有管理员权限时只有绑核与优先级生效，日志会提示。
+2. 关闭 power.aggressive 后，若 power.restoreOnDisable 为 true，会读取 config/cpuoptimizer-power.txt 恢复原始电源方案。
+3. AUTO 现在会优先锁定 P 核，P 核只有 4 个的机器由后台线程降级来减少争抢；如果跑图仍然觉得慢，把 cpu.bindMode 改成 ALL，或用 cpu.affinityMask 手动指定十六进制掩码。
+4. 服务端与客户端使用同一个 jar，不需要分开发布。
+5. 距离阈值之外的生物看起来会停在原地或动作变慢，靠近后立刻恢复，这是降频的正常表现。
+6. 与其他模组冲突时优先看日志里有没有实体降频失效的警告，有则把 entity.throttleEnabled 关掉，其余功能不受影响。
+
+五、与 1.8.0 的差异
+
+1. 删除 CacheCleaner、AsyncChunkEngine、ThreadPoolManager 三个类。
+2. 游戏进行中不再出现任何 System.gc() 调用。
+3. 不再每个 tick 扫描 625 个区块坐标。
+4. 不再用 PowerShell 在客户端 tick 里改进程优先级。
+
+六、测试建议
+
+1. 进游戏看日志开头的 CPU Optimizer 行，确认处理器型号、核心数量、指令集与绑核决策符合预期。
+2. 跑图时对比世界退出日志里的服务端 tick 平均值，重点看超时次数是否下降。
+3. 大量实体场景下观察 运行中 那一行统计，先看平均帧间隔，再看客户端 tick 耗时，判断瓶颈在渲染还是逻辑。
+4. 把 entity.throttleDistance 临时设成 16，确认远处生物明显变慢，说明注入生效。
+5. 绑核与高频策略属于系统级改动，测试前记录原始电源方案，便于恢复。
+
+七、本次针对崩溃的改动
+
+1. 新增崩溃兜底。上一版退出码为 -1 且没有生成崩溃报告，这种情况通常来自后台线程抛出的 ReportedException：原版只把它打印到控制台，不写进 crash-reports，所以看不到任何线索。现在模组会在启动后 10 秒、30 秒、2 分钟、5 分钟、11 分钟给所有线程挂上未捕获异常处理器，捕获到这类异常时把完整崩溃报告补写到 crash-reports 目录，文件名形如 crash-2026-11-01_12.00.00-cpuoptimizer-1.txt，同时在日志里输出路径。再出现同类退出时，把这个文件发出来即可定位。
+2. 进程优先级默认值从 HIGH 降到 ABOVE_NORMAL。HIGH 会与驱动线程、音频线程抢 CPU，出现掉帧或驱动超时重置时反而更糟；ABOVE_NORMAL 已经能拿到调度倾斜，风险小得多。需要更强可以把 cpu.processPriority 改回 HIGH。
+3. 线程优先级不再是最高级。上一版把渲染线程、服务端线程直接设成 MAX_PRIORITY，与系统线程同级会让鼠标输入、驱动与磁盘线程被饿死。现在只提高一档，收益接近而风险低。
+4. 实体降频加了异常隔离。注入点内部出现任何异常时，会打印一条警告并自动关闭实体降频，不会把异常抛回区块 tick 造成连锁崩溃。
+5. 所有事件处理都包了异常隔离，单个统计或内存整理的异常不会影响游戏主流程。
+6. 混入点保持不变，仍然是 required=false 与 require=0，其他模组改动同名方法时只会让本功能失效。
+
+八、本次针对 P 核绑定、内存与极致性能的改动
+
+1. AUTO 不再因为 P 核只有 4 个而退回全核。上一版 AUTO 要求 P 核不少于 8 个才锁定，i5-13500H 有 4 个 P 核 8 个 E 核，所以日志里写的是全核运行，你看到的就是绑定失效。现在只要检测到大小核就会锁定 P 核，日志会打印已绑定的逻辑处理器数量与掩码。
+2. 锁定 P 核后自动下调后台线程优先级。锁核之后区块生成、缓冲区构建、IO 与网络线程都被限制在同一批 P 核里，与渲染线程、服务端线程平级抢时间片，跑图时就会出现渲染线程拿不到 CPU 的卡顿。现在这些后台线程统一降一档，渲染线程与服务端线程提高一档，游戏线程优先拿到 P 核时间片。
+3. 新增 entity.profile 档位，默认 EXTREME：全速距离 24 格，第一档 48 格每 3 tick，第二档 96 格每 6 tick，96 格外再降一档。BALANCED 则完全按下面显式配置的数值走。这个键是新加的，所以你现有的配置文件也会直接拿到 EXTREME。
+4. 内存激进模式 memory.aggressive 默认开启：整理阈值从 75% 压到 70%，间隔从 30 秒压到 20 秒，并新增暂停界面整理。单机按 ESC 或开背包时服务端是暂停的，这时整理内存不会影响游戏过程，比在世界里做安全得多。
+5. JVM 建议参数新增 -XX:+ExplicitGCInvokesConcurrent，让主动整理走并发回收而不是整段停顿；新增 -XX:G1PeriodicGCInterval=60000 与 -XX:+G1PeriodicGCInvokesConcurrent，让 G1 周期性归还空闲堆；新增 -Dmax.bg.threads，锁 P 核的机器把后台线程数限制到 P 核线程数的两倍，避免十几个线程在 4 个核上互相抢占。
+6. 新增堆上限提示。启动时若堆上限超过 12288 MB，会在日志里给出建议值；参数文件里同样会写一条警告，说明堆越大单次回收越久、超过 32G 会关闭压缩指针导致对象引用变大。你当前用的是 -Xmx24558m，建议改成 8192 MB 左右。
+7. 启动日志新增一行，输出实体档位、内存激进模式与后台线程降级开关，方便确认配置真的生效。

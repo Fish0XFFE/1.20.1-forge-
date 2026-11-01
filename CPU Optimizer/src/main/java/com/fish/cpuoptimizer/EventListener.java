@@ -1,80 +1,67 @@
 package com.fish.cpuoptimizer;
 
-import com.fish.cpuoptimizer.chunk.AsyncChunkEngine;
+import com.fish.cpuoptimizer.memory.MemoryGuard;
+import com.fish.cpuoptimizer.stats.Stats;
+import com.fish.cpuoptimizer.throttle.EntityThrottle;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.level.ChunkPos;
 import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.server.ServerStartedEvent;
+import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 
-import java.lang.management.ManagementFactory;
-import java.lang.management.MemoryMXBean;
-import java.lang.management.MemoryUsage;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-
-public class EventListener {
-    private int tickCounter = 0;
-    private int memCheckCounter = 0;
-    private final MemoryMXBean memoryBean = ManagementFactory.getMemoryMXBean();
-    private final Map<UUID, ChunkPos> lastPlayerPos = new ConcurrentHashMap<>();
-
+public final class EventListener {
     @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
-        if (event.phase != TickEvent.Phase.START) return;
-        MinecraftServer server = event.getServer();
-        if (server == null || server.getPlayerCount() == 0) return;
-
-        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-            ChunkPos current = player.chunkPosition();
-            ChunkPos last = lastPlayerPos.get(player.getUUID());
-            if (last != null) {
-                int dx = current.x - last.x;
-                int dz = current.z - last.z;
-                if (dx * dx + dz * dz > 64) {
-                    if (player.level() instanceof ServerLevel level) {
-                        AsyncChunkEngine.preloadAroundPlayer(level, player, 24);
-                        CpuOptimizerMod.LOGGER.info("检测到玩家 {} 远距离传送",
-                                player.getName().getString());
-                    }
+        try {
+            if (event.phase == TickEvent.Phase.START) {
+                Stats.serverTickStart();
+                EntityThrottle.tickServer();
+            } else {
+                double elapsed = Stats.serverTickEnd();
+                if (elapsed > 0.0D) {
+                    EntityThrottle.observeServerTick(elapsed);
                 }
             }
-            lastPlayerPos.put(player.getUUID(), current);
-        }
-
-        AsyncChunkEngine.tick(server);
-        CacheCleaner.tick(server);
-
-        if (++memCheckCounter >= 100) {
-            memCheckCounter = 0;
-            MemoryUsage heap = memoryBean.getHeapMemoryUsage();
-            double freePercent = (1.0 - (double) heap.getUsed() / heap.getMax()) * 100.0;
-            if (freePercent < 6) {
-                CacheCleaner.forceClean();
-                CpuOptimizerMod.LOGGER.warn("内存仅剩 {}%，强制清理", String.format("%.1f", freePercent));
-            }
+        } catch (Throwable ignored) {
         }
     }
 
     @SubscribeEvent
-    public void onClientTick(TickEvent.ClientTickEvent event) {
-        if (event.phase != TickEvent.Phase.START) return;
-        if (tickCounter == 0) boostProcessPriority();
-        tickCounter++;
+    public void onServerStarted(ServerStartedEvent event) {
+        try {
+            Stats.reset();
+            EntityThrottle.reset();
+            MinecraftServer server = event.getServer();
+            Workers.submit(() -> {
+                try {
+                    Workers.sleep(30000L);
+                    if (server.getPlayerCount() == 0) {
+                        MemoryGuard.compactIfNeeded("服务端启动后");
+                    }
+                } catch (Throwable ignored) {
+                }
+            });
+        } catch (Throwable ignored) {
+        }
     }
 
-    private void boostProcessPriority() {
+    @SubscribeEvent
+    public void onServerStopping(ServerStoppingEvent event) {
         try {
-            String os = System.getProperty("os.name").toLowerCase();
-            if (os.contains("win")) {
-                long pid = ProcessHandle.current().pid();
-                Runtime.getRuntime().exec(new String[]{
-                        "powershell", "-NoProfile", "-Command",
-                        "(Get-Process -Id " + pid + ").PriorityClass = 'High'"
-                });
+            if (Tuning.logStatistics) {
+                Stats.report("服务端关闭");
             }
-        } catch (Exception ignored) {}
+            if (Tuning.logDetail) {
+                EntityThrottle.report();
+            }
+            Workers.submit(() -> {
+                try {
+                    Workers.sleep(1500L);
+                    MemoryGuard.compactIfNeeded("服务端关闭");
+                } catch (Throwable ignored) {
+                }
+            });
+        } catch (Throwable ignored) {
+        }
     }
 }

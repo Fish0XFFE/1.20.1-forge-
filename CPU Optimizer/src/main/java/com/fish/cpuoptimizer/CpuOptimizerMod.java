@@ -1,30 +1,44 @@
 package com.fish.cpuoptimizer;
 
-import com.fish.cpuoptimizer.affinity.AffinityBinderClient;
+import com.fish.cpuoptimizer.client.ClientBootstrap;
 import com.fish.cpuoptimizer.config.Config;
-import com.fish.cpuoptimizer.threading.ThreadPoolManager;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.fml.DistExecutor;
 import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.config.ModConfig;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import net.minecraftforge.fml.event.config.ModConfigEvent;
+import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 
-@Mod("cpuoptimizer")
-public class CpuOptimizerMod {
+@Mod(CpuOptimizerMod.MOD_ID)
+public final class CpuOptimizerMod {
     public static final String MOD_ID = "cpuoptimizer";
-    public static final Logger LOGGER = LogManager.getLogger(MOD_ID);
 
     public CpuOptimizerMod() {
-        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, Config.COMMON_SPEC);
-        ModLoadingContext.get().registerConfig(ModConfig.Type.CLIENT, Config.CLIENT_SPEC);
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, Config.SPEC);
+        IEventBus bus = FMLJavaModLoadingContext.get().getModEventBus();
+        bus.addListener(this::onCommonSetup);
+        bus.addListener(this::onConfig);
         MinecraftForge.EVENT_BUS.register(new EventListener());
-        DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> AffinityBinderClient::tryAutoBind);
-        LOGGER.info("区块池:{} ",
-                ThreadPoolManager.getChunkPoolSize(),
-                ThreadPoolManager.getChunkPoolSize() + 2);
-                
+        DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> ClientBootstrap::register);
+    }
+
+    private void onCommonSetup(FMLCommonSetupEvent event) {
+        event.enqueueWork(() -> {
+            Tuning.refresh();
+            CpuBootstrap.run();
+        });
+    }
+
+    private void onConfig(ModConfigEvent event) {
+        try {
+            if (event.getConfig().getSpec() == Config.SPEC) {
+                Tuning.refresh();
+            }
+        } catch (Throwable ignored) {
+        }
     }
 }
